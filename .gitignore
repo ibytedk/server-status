@@ -1,0 +1,14 @@
+# Lokale hemmeligheder og maskinspecifik konfiguration (se README)
+config.local.php
+
+# Kørsel-data — standardstier fra stats.php (DEFAULT_*)
+/data/ip-blocklist.json
+/data/apache-ip-blocklist.conf
+/data/history/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+~*
