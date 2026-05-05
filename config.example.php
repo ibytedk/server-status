@@ -24,4 +24,13 @@ return [
     'history_storage_dir' => __DIR__ . '/data/history',
     'history_sample_interval_seconds' => 60,
     'history_retention_days' => 35,
+
+    // MySQL/MariaDB monitor stats shown on the dashboard.
+    'database_status_enabled' => true,
+    'database_status_host' => '127.0.0.1',
+    'database_status_port' => 3306,
+    'database_status_user' => 'root',
+    'database_status_password' => '',
+    'database_status_socket' => '',
+    'database_status_connect_timeout_seconds' => 2,
 ];

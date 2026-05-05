@@ -139,6 +139,50 @@
     gap: 16px;
   }
 
+  .database-section {
+    display: grid;
+    gap: 16px;
+    margin-top: 16px;
+  }
+
+  .section-heading {
+    align-items: end;
+    padding: 0 4px;
+  }
+
+  .section-heading h2 {
+    margin: 0 0 4px;
+    font-size: 20px;
+  }
+
+  .database-charts {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .legend-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+
   .stack {
     display: grid;
     gap: 16px;
@@ -405,7 +449,8 @@
     .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .layout,
     .hero,
-    .history-grid { grid-template-columns: 1fr; }
+    .history-grid,
+    .database-charts { grid-template-columns: 1fr; }
   }
 
   @media (max-width: 820px) {
@@ -527,6 +572,76 @@
     </div>
   </section>
 
+  <section class="database-section">
+    <div class="row section-heading">
+      <div>
+        <h2>Database Monitor</h2>
+        <div class="admin-copy" id="db-note">MySQL/MariaDB status waits for the first poll.</div>
+      </div>
+      <strong id="db-state">Waiting</strong>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="label">DB Questions</div>
+        <div class="value" id="db-questions-card">-</div>
+        <div class="sub" id="db-questions-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="label">DB Connections</div>
+        <div class="value" id="db-connections-card">-</div>
+        <div class="sub" id="db-connections-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Threads Running</div>
+        <div class="value" id="db-threads-card">-</div>
+        <div class="sub" id="db-threads-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Bytes Sent</div>
+        <div class="value" id="db-sent-card">-</div>
+        <div class="sub" id="db-sent-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Bytes Received</div>
+        <div class="value" id="db-received-card">-</div>
+        <div class="sub" id="db-received-sub">-</div>
+      </div>
+      <div class="card">
+        <div class="label">Slow Queries</div>
+        <div class="value" id="db-slow-card">-</div>
+        <div class="sub" id="db-slow-sub">-</div>
+      </div>
+    </div>
+
+    <div class="database-charts">
+      <div class="panel">
+        <div class="row"><h2>Questions</h2><strong id="db-questions-now">-</strong></div>
+        <svg class="spark" id="spark-db-questions" viewBox="0 0 300 82" preserveAspectRatio="none"></svg>
+        <div class="chart-legend">
+          <span class="legend-item" style="color:#0f766e"><span class="legend-dot"></span>Questions / poll</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="row"><h2>Connections / Processes</h2><strong id="db-connections-now">-</strong></div>
+        <svg class="spark" id="spark-db-connections" viewBox="0 0 300 82" preserveAspectRatio="none"></svg>
+        <div class="chart-legend">
+          <span class="legend-item" style="color:#38bdf8"><span class="legend-dot"></span>Connections / poll</span>
+          <span class="legend-item" style="color:#f59e0b"><span class="legend-dot"></span>Processes</span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="row"><h2>Traffic</h2><strong id="db-traffic-now">-</strong></div>
+        <svg class="spark" id="spark-db-traffic" viewBox="0 0 300 82" preserveAspectRatio="none"></svg>
+        <div class="chart-legend">
+          <span class="legend-item" style="color:#06b6d4"><span class="legend-dot"></span>Sent</span>
+          <span class="legend-item" style="color:#7c3aed"><span class="legend-dot"></span>Received</span>
+        </div>
+      </div>
+    </div>
+    <div class="status-note" id="db-error"></div>
+  </section>
+
   <section class="panel requests">
     <div class="row">
       <h2>Requests Under Load</h2>
@@ -645,8 +760,26 @@
 
 <script>
 const historySize = 40;
-const history = { rps: [], cpu: [], requests: [], bps: [], cache: [] };
-const previousCounters = { totalAccesses: null };
+const history = {
+  rps: [],
+  cpu: [],
+  requests: [],
+  bps: [],
+  cache: [],
+  dbQuestions: [],
+  dbConnections: [],
+  dbProcesses: [],
+  dbBytesSent: [],
+  dbBytesReceived: []
+};
+const previousCounters = {
+  totalAccesses: null,
+  dbQuestions: null,
+  dbConnections: null,
+  dbBytesSent: null,
+  dbBytesReceived: null,
+  timestampMs: null
+};
 const uiState = {
   adminKey: sessionStorage.getItem('serverStatusAdminKey') || '',
   latestData: null,
@@ -682,8 +815,37 @@ function pushMetric(name, value) {
   }
 }
 
+function getCounterDelta(name, value) {
+  const current = Number(value || 0);
+  const previous = previousCounters[name];
+
+  previousCounters[name] = Number.isFinite(current) ? current : null;
+
+  if (previous === null || previous === undefined || !Number.isFinite(current) || !Number.isFinite(previous) || current < previous) {
+    return 0;
+  }
+
+  return Math.max(0, current - previous);
+}
+
+function formatInteger(value) {
+  return Number(value || 0).toLocaleString('da-DK');
+}
+
 function formatFixed(value, digits = 2) {
   return Number(value || 0).toFixed(digits);
+}
+
+function formatBytes(value) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = Number(value || 0);
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(digits)} ${units[unitIndex]}`;
 }
 
 function formatBytesPerSecond(value) {
@@ -760,6 +922,47 @@ function renderSparkline(id, values, stroke) {
   svg.innerHTML = `
     <polyline fill="none" stroke="#d7e0ea" stroke-width="1.2" points="6,76 294,76"></polyline>
     <polyline fill="none" stroke="${stroke}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>
+  `;
+}
+
+function renderMultiSparkline(id, series) {
+  const svg = byId(id);
+  const visibleSeries = series.filter(function (item) {
+    return item.values && item.values.length;
+  });
+
+  if (!visibleSeries.length) {
+    svg.innerHTML = '';
+    return;
+  }
+
+  const allValues = [];
+  visibleSeries.forEach(function (item) {
+    item.values.forEach(function (value) {
+      allValues.push(Number(value || 0));
+    });
+  });
+
+  const width = 300;
+  const height = 82;
+  const pad = 6;
+  const min = Math.min(0, ...allValues);
+  const max = Math.max(...allValues);
+  const range = max - min || 1;
+
+  const lines = visibleSeries.map(function (item) {
+    const points = item.values.map(function (value, index) {
+      const x = pad + (index * (width - pad * 2)) / Math.max(item.values.length - 1, 1);
+      const y = height - pad - ((Number(value || 0) - min) / range) * (height - pad * 2);
+      return `${x},${y}`;
+    }).join(' ');
+
+    return `<polyline fill="none" stroke="${item.stroke}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>`;
+  }).join('');
+
+  svg.innerHTML = `
+    <polyline fill="none" stroke="#d7e0ea" stroke-width="1.2" points="6,76 294,76"></polyline>
+    ${lines}
   `;
 }
 
@@ -1034,6 +1237,101 @@ function renderHistory(history, errorText) {
   byId('history-windows').innerHTML = html || '<div class="empty">Historical load will appear here when samples have been collected.</div>';
 }
 
+function setDatabaseUnavailable(state, note, errorText) {
+  setText('db-state', state);
+  setText('db-note', note);
+  setText('db-questions-card', '-');
+  setText('db-questions-sub', '-');
+  setText('db-connections-card', '-');
+  setText('db-connections-sub', '-');
+  setText('db-threads-card', '-');
+  setText('db-threads-sub', '-');
+  setText('db-sent-card', '-');
+  setText('db-sent-sub', '-');
+  setText('db-received-card', '-');
+  setText('db-received-sub', '-');
+  setText('db-slow-card', '-');
+  setText('db-slow-sub', '-');
+  setText('db-questions-now', '-');
+  setText('db-connections-now', '-');
+  setText('db-traffic-now', '-');
+  byId('spark-db-questions').innerHTML = '';
+  byId('spark-db-connections').innerHTML = '';
+  byId('spark-db-traffic').innerHTML = '';
+
+  const errorEl = byId('db-error');
+  errorEl.textContent = errorText || '';
+  errorEl.className = `status-note ${errorText ? 'error' : ''}`;
+}
+
+function renderDatabase(database, elapsedSeconds) {
+  if (!database) {
+    setDatabaseUnavailable('Unavailable', 'Database stats are not present in the backend payload.', '');
+    return;
+  }
+
+  if (!database.enabled) {
+    setDatabaseUnavailable('Disabled', 'Database status monitoring is disabled in config.', '');
+    return;
+  }
+
+  if (!database.ok || !database.snapshot) {
+    setDatabaseUnavailable('Error', 'Could not read MySQL/MariaDB status for this poll.', database.error || 'Unknown database status error.');
+    return;
+  }
+
+  const snapshot = database.snapshot;
+  const safeElapsed = Math.max(0.001, Number(elapsedSeconds || 2));
+  const questionsDelta = getCounterDelta('dbQuestions', snapshot.questions);
+  const connectionsDelta = getCounterDelta('dbConnections', snapshot.connections);
+  const bytesSentDelta = getCounterDelta('dbBytesSent', snapshot.bytesSent);
+  const bytesReceivedDelta = getCounterDelta('dbBytesReceived', snapshot.bytesReceived);
+  const sentPerSecond = bytesSentDelta / safeElapsed;
+  const receivedPerSecond = bytesReceivedDelta / safeElapsed;
+  const processCount = Number(snapshot.processCount || 0);
+  const activeProcessCount = Number(snapshot.activeProcessCount || 0);
+  const threadsConnected = Number(snapshot.threadsConnected || 0);
+  const threadsRunning = Number(snapshot.threadsRunning || 0);
+
+  setText('db-state', 'Live');
+  setText('db-note', `${database.versionComment || 'Database'} ${database.serverVersion || ''} on ${database.host}:${database.port} | Uptime ${formatUptime(snapshot.uptime)}`);
+  setText('db-questions-card', formatInteger(questionsDelta));
+  setText('db-questions-sub', `${formatInteger(snapshot.questions)} total questions`);
+  setText('db-connections-card', formatInteger(connectionsDelta));
+  setText('db-connections-sub', `${formatInteger(threadsConnected)} connected / ${formatInteger(activeProcessCount)} active`);
+  setText('db-threads-card', formatInteger(threadsRunning));
+  setText('db-threads-sub', `${formatInteger(threadsConnected)} connected / ${formatInteger(snapshot.maxConnections)} max`);
+  setText('db-sent-card', formatBytesPerSecond(sentPerSecond));
+  setText('db-sent-sub', `${formatBytes(snapshot.bytesSent)} total sent`);
+  setText('db-received-card', formatBytesPerSecond(receivedPerSecond));
+  setText('db-received-sub', `${formatBytes(snapshot.bytesReceived)} total received`);
+  setText('db-slow-card', formatInteger(snapshot.slowQueries));
+  setText('db-slow-sub', `${formatInteger(snapshot.abortedConnects)} aborted connects`);
+  setText('db-questions-now', `${formatInteger(questionsDelta)} last poll`);
+  setText('db-connections-now', `+${formatInteger(connectionsDelta)} / ${formatInteger(processCount)}`);
+  setText('db-traffic-now', `${formatBytesPerSecond(sentPerSecond)} out`);
+
+  const errorEl = byId('db-error');
+  errorEl.textContent = database.processError ? `Process list: ${database.processError}` : '';
+  errorEl.className = `status-note ${database.processError ? 'error' : ''}`;
+
+  pushMetric('dbQuestions', questionsDelta);
+  pushMetric('dbConnections', connectionsDelta);
+  pushMetric('dbProcesses', processCount);
+  pushMetric('dbBytesSent', sentPerSecond);
+  pushMetric('dbBytesReceived', receivedPerSecond);
+
+  renderSparkline('spark-db-questions', history.dbQuestions, '#0f766e');
+  renderMultiSparkline('spark-db-connections', [
+    { values: history.dbConnections, stroke: '#38bdf8' },
+    { values: history.dbProcesses, stroke: '#f59e0b' }
+  ]);
+  renderMultiSparkline('spark-db-traffic', [
+    { values: history.dbBytesSent, stroke: '#06b6d4' },
+    { values: history.dbBytesReceived, stroke: '#7c3aed' }
+  ]);
+}
+
 function renderBlocklistPanel(blocklist) {
   const adminConfigured = Boolean(blocklist && blocklist.adminKeyConfigured);
   const writeReady = adminConfigured && Boolean(uiState.adminKey);
@@ -1108,21 +1406,23 @@ async function refreshDashboard() {
     const data = payload.data;
     uiState.latestData = data;
     const updated = new Date(payload.timestamp);
+    const updatedMs = updated.getTime();
+    const elapsedSeconds = previousCounters.timestampMs
+      ? Math.max(0.001, (updatedMs - previousCounters.timestampMs) / 1000)
+      : 2;
+    previousCounters.timestampMs = updatedMs;
     const activeSites = data.ActiveVHosts || [];
     const activeRequests = data.ActiveRequests || [];
     const activePairs = data.ActiveClientPairs || [];
     const blocklist = data.Blocklist || null;
+    const database = data.Database || null;
     const apacheCpu = data.ApacheCpuPercent ?? data.CPULoad ?? null;
     const outputCacheHitPercent = data.OutputCacheHitPercent;
     const observedRequestCount = Number(data.ObservedRequestCount || 0);
     const keepaliveRequestCount = Number(data.KeepaliveRequestCount || 0);
     const pressureRequestCount = Number(data.PressureRequestCount || data.ActiveRequestCount || 0);
     const totalAccesses = Number(data.TotalAccesses || 0);
-    const requestDelta = previousCounters.totalAccesses === null
-      ? 0
-      : Math.max(0, totalAccesses - previousCounters.totalAccesses);
-
-    previousCounters.totalAccesses = totalAccesses;
+    const requestDelta = getCounterDelta('totalAccesses', totalAccesses);
 
     const cpuSourceMap = {
       mod_status: 'Apache mod_status',
@@ -1188,6 +1488,7 @@ async function refreshDashboard() {
     renderClientPairs(activePairs, blocklist);
     renderBlockedEntries(blocklist);
     renderHistory(data.History || null, data.HistoryError || '');
+    renderDatabase(database, elapsedSeconds);
     renderBlockScopeOptions(data);
     renderBlocklistPanel(blocklist);
   } catch (error) {
@@ -1196,6 +1497,7 @@ async function refreshDashboard() {
     uiState.mutationMessage = error.message;
     uiState.mutationError = true;
     renderHistory(uiState.latestData ? uiState.latestData.History : null, error.message);
+    renderDatabase(uiState.latestData ? uiState.latestData.Database : null, 2);
     renderBlocklistPanel(uiState.latestData ? uiState.latestData.Blocklist : null);
   }
 }

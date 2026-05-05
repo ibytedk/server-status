@@ -788,6 +788,206 @@ function parseOutputCacheLogStats(): array
     ];
 }
 
+function buildDatabaseStatusBase(): array
+{
+    $config = loadRuntimeConfig();
+
+    return [
+        'enabled' => (bool) $config['database_status_enabled'],
+        'ok' => false,
+        'configured' => (bool) $config['database_status_enabled'],
+        'source' => 'mysqli SHOW GLOBAL STATUS',
+        'host' => (string) $config['database_status_host'],
+        'port' => (int) $config['database_status_port'],
+        'serverVersion' => null,
+        'versionComment' => null,
+        'snapshot' => null,
+    ];
+}
+
+function castDatabaseValue($value)
+{
+    if (is_numeric((string) $value)) {
+        return str_contains((string) $value, '.') ? (float) $value : (int) $value;
+    }
+
+    return $value;
+}
+
+function pickDatabaseCounter(array $values, array $names): int
+{
+    foreach ($names as $name) {
+        if (array_key_exists($name, $values) && is_numeric((string) $values[$name])) {
+            return (int) $values[$name];
+        }
+    }
+
+    return 0;
+}
+
+function fetchDatabaseNameValueRows(mysqli $connection, string $query): array
+{
+    $result = @$connection->query($query);
+
+    if (!$result instanceof mysqli_result) {
+        throw new RuntimeException($connection->error !== '' ? $connection->error : 'Database status query failed.');
+    }
+
+    $values = [];
+
+    while ($row = $result->fetch_assoc()) {
+        $name = (string) ($row['Variable_name'] ?? '');
+
+        if ($name === '') {
+            continue;
+        }
+
+        $values[$name] = castDatabaseValue($row['Value'] ?? '');
+    }
+
+    $result->free();
+
+    return $values;
+}
+
+function fetchDatabaseProcessStats(mysqli $connection): array
+{
+    $result = @$connection->query('SHOW FULL PROCESSLIST');
+
+    if (!$result instanceof mysqli_result) {
+        return [
+            'processCount' => null,
+            'activeProcessCount' => null,
+            'processError' => $connection->error !== '' ? $connection->error : 'SHOW FULL PROCESSLIST failed.',
+        ];
+    }
+
+    $processCount = 0;
+    $activeProcessCount = 0;
+
+    while ($row = $result->fetch_assoc()) {
+        $processCount++;
+        $command = strtolower(trim((string) ($row['Command'] ?? '')));
+
+        if ($command !== '' && $command !== 'sleep') {
+            $activeProcessCount++;
+        }
+    }
+
+    $result->free();
+
+    return [
+        'processCount' => $processCount,
+        'activeProcessCount' => $activeProcessCount,
+        'processError' => null,
+    ];
+}
+
+function getDatabaseStatus(): array
+{
+    $config = loadRuntimeConfig();
+    $base = buildDatabaseStatusBase();
+
+    if (!$config['database_status_enabled']) {
+        return array_merge($base, [
+            'source' => 'disabled',
+            'error' => 'Database status monitoring is disabled.',
+        ]);
+    }
+
+    if (!extension_loaded('mysqli')) {
+        return array_merge($base, [
+            'error' => 'PHP mysqli extension is not loaded.',
+        ]);
+    }
+
+    if (function_exists('mysqli_report') && defined('MYSQLI_REPORT_OFF')) {
+        mysqli_report(MYSQLI_REPORT_OFF);
+    }
+
+    $connection = mysqli_init();
+
+    if (!$connection instanceof mysqli) {
+        return array_merge($base, [
+            'error' => 'Could not initialize mysqli.',
+        ]);
+    }
+
+    if (defined('MYSQLI_OPT_CONNECT_TIMEOUT')) {
+        $connection->options(MYSQLI_OPT_CONNECT_TIMEOUT, (int) $config['database_status_connect_timeout_seconds']);
+    }
+
+    $socket = (string) $config['database_status_socket'];
+    $connected = @$connection->real_connect(
+        (string) $config['database_status_host'],
+        (string) $config['database_status_user'],
+        (string) $config['database_status_password'],
+        null,
+        (int) $config['database_status_port'],
+        $socket !== '' ? $socket : null
+    );
+
+    if (!$connected) {
+        $error = mysqli_connect_error();
+
+        if ($error === '') {
+            $error = $connection->connect_error;
+        }
+
+        return array_merge($base, [
+            'error' => $error !== '' ? $error : 'Could not connect to the database server.',
+        ]);
+    }
+
+    try {
+        $status = fetchDatabaseNameValueRows(
+            $connection,
+            "SHOW GLOBAL STATUS WHERE Variable_name IN ('Questions','Queries','Connections','Threads_connected','Threads_running','Bytes_sent','Bytes_received','Slow_queries','Aborted_connects','Max_used_connections','Uptime','Com_select','Com_insert','Com_update','Com_delete')"
+        );
+        $variables = fetchDatabaseNameValueRows(
+            $connection,
+            "SHOW GLOBAL VARIABLES WHERE Variable_name IN ('version','version_comment','max_connections')"
+        );
+        $processStats = fetchDatabaseProcessStats($connection);
+
+        $snapshot = [
+            'questions' => pickDatabaseCounter($status, ['Questions', 'Queries']),
+            'queries' => pickDatabaseCounter($status, ['Queries']),
+            'connections' => pickDatabaseCounter($status, ['Connections']),
+            'threadsConnected' => pickDatabaseCounter($status, ['Threads_connected']),
+            'threadsRunning' => pickDatabaseCounter($status, ['Threads_running']),
+            'bytesSent' => pickDatabaseCounter($status, ['Bytes_sent']),
+            'bytesReceived' => pickDatabaseCounter($status, ['Bytes_received']),
+            'slowQueries' => pickDatabaseCounter($status, ['Slow_queries']),
+            'abortedConnects' => pickDatabaseCounter($status, ['Aborted_connects']),
+            'maxUsedConnections' => pickDatabaseCounter($status, ['Max_used_connections']),
+            'uptime' => pickDatabaseCounter($status, ['Uptime']),
+            'selects' => pickDatabaseCounter($status, ['Com_select']),
+            'inserts' => pickDatabaseCounter($status, ['Com_insert']),
+            'updates' => pickDatabaseCounter($status, ['Com_update']),
+            'deletes' => pickDatabaseCounter($status, ['Com_delete']),
+            'processCount' => $processStats['processCount'] ?? 0,
+            'activeProcessCount' => $processStats['activeProcessCount'] ?? 0,
+            'maxConnections' => pickDatabaseCounter($variables, ['max_connections']),
+        ];
+
+        return array_merge($base, [
+            'ok' => true,
+            'serverVersion' => (string) ($variables['version'] ?? $connection->server_info),
+            'versionComment' => (string) ($variables['version_comment'] ?? ''),
+            'status' => $status,
+            'processError' => $processStats['processError'] ?? null,
+            'snapshot' => $snapshot,
+        ]);
+    } catch (Throwable $e) {
+        return array_merge($base, [
+            'error' => $e->getMessage(),
+        ]);
+    } finally {
+        $connection->close();
+    }
+}
+
 function loadBlocklistState(): array
 {
     $config = loadRuntimeConfig();
@@ -1291,6 +1491,7 @@ function buildDashboardData(): array
     $raw = fetchStatus(STATUS_SUMMARY_URL);
     $data = parseStatus($raw);
     $data = array_merge($data, parseOutputCacheLogStats());
+    $data['Database'] = getDatabaseStatus();
 
     $rawApacheCpu = isset($data['CPULoad']) && is_numeric((string) $data['CPULoad'])
         ? (float) $data['CPULoad']
