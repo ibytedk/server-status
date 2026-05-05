@@ -18,7 +18,7 @@ const DEFAULT_HISTORY_STORAGE_DIR = __DIR__ . '/data/history';
 const DEFAULT_HISTORY_SAMPLE_INTERVAL_SECONDS = 60;
 const DEFAULT_HISTORY_RETENTION_DAYS = 35;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     handleMutationRequest();
 }
 
@@ -61,11 +61,20 @@ function loadRuntimeConfig(): array
         'history_storage_dir' => DEFAULT_HISTORY_STORAGE_DIR,
         'history_sample_interval_seconds' => (string) DEFAULT_HISTORY_SAMPLE_INTERVAL_SECONDS,
         'history_retention_days' => (string) DEFAULT_HISTORY_RETENTION_DAYS,
+        'database_status_enabled' => '1',
+        'database_status_host' => '127.0.0.1',
+        'database_status_port' => '3306',
+        'database_status_user' => 'root',
+        'database_status_password' => '',
+        'database_status_socket' => '',
+        'database_status_connect_timeout_seconds' => '2',
     ];
 
-    $configFile = __DIR__ . '/config.local.php';
+    foreach ([__DIR__ . '/config.php', __DIR__ . '/config.local.php'] as $configFile) {
+        if (!is_file($configFile)) {
+            continue;
+        }
 
-    if (is_file($configFile)) {
         $loaded = require $configFile;
 
         if (is_array($loaded)) {
@@ -87,6 +96,13 @@ function loadRuntimeConfig(): array
         'history_storage_dir' => 'SERVER_STATUS_HISTORY_STORAGE_DIR',
         'history_sample_interval_seconds' => 'SERVER_STATUS_HISTORY_SAMPLE_INTERVAL_SECONDS',
         'history_retention_days' => 'SERVER_STATUS_HISTORY_RETENTION_DAYS',
+        'database_status_enabled' => 'SERVER_STATUS_DATABASE_STATUS_ENABLED',
+        'database_status_host' => 'SERVER_STATUS_DATABASE_STATUS_HOST',
+        'database_status_port' => 'SERVER_STATUS_DATABASE_STATUS_PORT',
+        'database_status_user' => 'SERVER_STATUS_DATABASE_STATUS_USER',
+        'database_status_password' => 'SERVER_STATUS_DATABASE_STATUS_PASSWORD',
+        'database_status_socket' => 'SERVER_STATUS_DATABASE_STATUS_SOCKET',
+        'database_status_connect_timeout_seconds' => 'SERVER_STATUS_DATABASE_STATUS_CONNECT_TIMEOUT_SECONDS',
     ];
 
     foreach ($envMap as $configKey => $envKey) {
@@ -102,6 +118,10 @@ function loadRuntimeConfig(): array
     $config['history_storage_dir'] = normalizePath((string) $config['history_storage_dir']);
     $config['history_sample_interval_seconds'] = max(10, (int) ($config['history_sample_interval_seconds'] ?? DEFAULT_HISTORY_SAMPLE_INTERVAL_SECONDS));
     $config['history_retention_days'] = max(2, (int) ($config['history_retention_days'] ?? DEFAULT_HISTORY_RETENTION_DAYS));
+    $config['database_status_enabled'] = normalizeBoolean((string) $config['database_status_enabled'], true);
+    $config['database_status_port'] = max(0, (int) ($config['database_status_port'] ?? 3306));
+    $config['database_status_socket'] = normalizePath((string) ($config['database_status_socket'] ?? ''));
+    $config['database_status_connect_timeout_seconds'] = max(1, min(10, (int) ($config['database_status_connect_timeout_seconds'] ?? 2)));
 
     return $config;
 }
@@ -115,6 +135,21 @@ function normalizePath(string $path): string
     }
 
     return str_replace('\\', '/', $trimmed);
+}
+
+function normalizeBoolean(string $value, bool $default): bool
+{
+    $normalized = strtolower(trim($value));
+
+    if (in_array($normalized, ['1', 'true', 'yes', 'on'], true)) {
+        return true;
+    }
+
+    if (in_array($normalized, ['0', 'false', 'no', 'off', ''], true)) {
+        return false;
+    }
+
+    return $default;
 }
 
 function fetchStatus(string $url): string

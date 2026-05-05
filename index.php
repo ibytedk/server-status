@@ -440,6 +440,14 @@
       <button class="button" type="button" id="save-admin-key">Use key in this browser tab</button>
       <button class="button secondary" type="button" id="clear-admin-key">Clear key</button>
     </div>
+    <form class="toolbar" id="manual-block-form">
+      <input class="input" type="text" id="manual-block-ip" placeholder="IP address to block" autocomplete="off">
+      <input class="input" type="text" id="manual-block-scope" list="block-scope-options" value="global" placeholder="Scope: global or website" autocomplete="off">
+      <datalist id="block-scope-options">
+        <option value="global"></option>
+      </datalist>
+      <button class="button danger" type="submit" id="manual-block-submit">Block IP</button>
+    </form>
     <div class="status-note" id="mutation-status">No blocklist changes yet.</div>
     <div class="facts">
       <div class="fact"><span>Blocked Entries</span><strong id="blocked-count">-</strong></div>
@@ -851,6 +859,33 @@ function canMutate(blocklist) {
   return Boolean(blocklist && blocklist.adminKeyConfigured && uiState.adminKey);
 }
 
+function updateManualBlockControls(blocklist) {
+  const ready = canMutate(blocklist);
+  const ipInput = byId('manual-block-ip');
+  const scopeInput = byId('manual-block-scope');
+  const submit = byId('manual-block-submit');
+
+  ipInput.disabled = !ready;
+  scopeInput.disabled = !ready;
+  submit.disabled = !ready || ipInput.value.trim() === '';
+}
+
+function renderBlockScopeOptions(data) {
+  const scopes = ['global'];
+  (data.ActiveVHosts || []).forEach(function (vhost) {
+    const scope = String(vhost.vhost || '').trim();
+    if (scope && scope !== 'Unknown' && !scopes.includes(scope)) {
+      scopes.push(scope);
+    }
+  });
+
+  byId('block-scope-options').innerHTML = scopes
+    .map(function (scope) {
+      return `<option value="${escapeHtml(scope)}"></option>`;
+    })
+    .join('');
+}
+
 function renderPairActions(item, blocklist) {
   if (!blocklist || !blocklist.adminKeyConfigured) {
     return '<span class="muted">Configure admin key on server</span>';
@@ -1020,6 +1055,7 @@ function renderBlocklistPanel(blocklist) {
   const mutation = byId('mutation-status');
   mutation.textContent = uiState.mutationMessage;
   mutation.className = `status-note ${uiState.mutationError ? 'error' : 'ok'}`;
+  updateManualBlockControls(blocklist);
 }
 
 async function mutateBlocklist(action, scope, ip) {
@@ -1152,6 +1188,7 @@ async function refreshDashboard() {
     renderClientPairs(activePairs, blocklist);
     renderBlockedEntries(blocklist);
     renderHistory(data.History || null, data.HistoryError || '');
+    renderBlockScopeOptions(data);
     renderBlocklistPanel(blocklist);
   } catch (error) {
     setText('live-state', 'Error');
@@ -1179,6 +1216,32 @@ byId('clear-admin-key').addEventListener('click', function () {
   uiState.mutationMessage = 'Admin key cleared from this browser tab.';
   uiState.mutationError = false;
   renderBlocklistPanel(uiState.latestData ? uiState.latestData.Blocklist : null);
+});
+
+byId('manual-block-ip').addEventListener('input', function () {
+  updateManualBlockControls(uiState.latestData ? uiState.latestData.Blocklist : null);
+});
+
+byId('manual-block-form').addEventListener('submit', async function (event) {
+  event.preventDefault();
+
+  const ip = byId('manual-block-ip').value.trim();
+  const scope = byId('manual-block-scope').value.trim() || 'global';
+
+  if (!ip) {
+    uiState.mutationMessage = 'Enter an IP address to block.';
+    uiState.mutationError = true;
+    renderBlocklistPanel(uiState.latestData ? uiState.latestData.Blocklist : null);
+    return;
+  }
+
+  await mutateBlocklist('block', scope, ip);
+
+  if (!uiState.mutationError) {
+    byId('manual-block-ip').value = '';
+    byId('manual-block-scope').value = scope;
+    updateManualBlockControls(uiState.latestData ? uiState.latestData.Blocklist : null);
+  }
 });
 
 document.addEventListener('click', function (event) {
